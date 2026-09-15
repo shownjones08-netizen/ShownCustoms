@@ -98,11 +98,11 @@ def default_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 MAIN_OWNER = 7660357725
-SUPER_ADMIN_NAME = "@"
-SUPER_ADMIN_LINK = "https://t.me/sahilxalone"
-SUPER_ADMINS = [8256108006]
+SUPER_ADMIN_NAME = "@ShownJones"
+SUPER_ADMIN_LINK = "https://t.me/ShownJones"
+SUPER_ADMINS = [7660357725]
 
-BOT_TOKEN = "8851983565:AAEcaSfUS6cvVMSzVAeveFwtFe5D48K2v0E"
+BOT_TOKEN = "8607200760:AAFv7cxd_5X-U_j0geFDZvN2tN_c2GTsHjs"
 LOG_CHANNEL_ID = -1004307603295
 
 _DATA_FILE = "blast_data.json"
