@@ -2,6 +2,7 @@ import asyncio, json, os, time, logging, random, string, threading, io
 from datetime import datetime
 from copy import deepcopy
 from collections import defaultdict
+from urllib.parse import quote
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F, Router
@@ -97,11 +98,11 @@ def default_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 MAIN_OWNER = 7660357725
-SUPER_ADMIN_NAME = "@SHOWNJONES"
-SUPER_ADMIN_LINK = "https://t.me/SHOWNJONES"
-SUPER_ADMINS = [7660357725]
+SUPER_ADMIN_NAME = "@"
+SUPER_ADMIN_LINK = "https://t.me/sahilxalone"
+SUPER_ADMINS = [8256108006]
 
-BOT_TOKEN = "8607200760:AAFv7cxd_5X-U_j0geFDZvN2tN_c2GTsHjs"
+BOT_TOKEN = "8851983565:AAEcaSfUS6cvVMSzVAeveFwtFe5D48K2v0E"
 LOG_CHANNEL_ID = -1004307603295
 
 _DATA_FILE = "blast_data.json"
@@ -217,6 +218,7 @@ class S(StatesGroup):
     gen_redeem_credits = State()
     gen_redeem_uses = State()
     set_ref_credits = State()
+    set_ref_required = State()
     protect_number = State()
     track_number = State()
     transfer_credits_uid = State()
@@ -239,7 +241,7 @@ def _default_data() -> dict:
         "force_join": {"enabled": False, "channels": []},
         "pricing": {"plans": []},
         "redeem_codes": {},
-        "settings": {"ref_credits": 3, "max_owners": 6},
+        "settings": {"ref_credits": 3, "max_owners": 6, "referral_gate_enabled": True, "referral_required": 2},
         "sms_history": {},
         "activity_log": [],
         "protected_numbers": {},
@@ -258,6 +260,13 @@ def load() -> dict:
                         data[k] = v
                 if MAIN_OWNER not in data.get("owners", []):
                     data["owners"].insert(0, MAIN_OWNER)
+                data.setdefault("settings", {})
+                data["settings"].setdefault("referral_gate_enabled", True)
+                data["settings"].setdefault("referral_required", 2)
+                try:
+                    data["settings"]["referral_required"] = max(0, int(data["settings"].get("referral_required", 2)))
+                except Exception:
+                    data["settings"]["referral_required"] = 2
                 for uid_str, u in data.get("users", {}).items():
                     if "credits" not in u:
                         u["credits"] = 0
@@ -265,6 +274,8 @@ def load() -> dict:
                         u["sms_history"] = []
                     if "manual_added_credits" not in u:
                         u["manual_added_credits"] = 0
+                    if "referral_count" not in u:
+                        u["referral_count"] = 0
                 # Load protected numbers from disk into global
                 global PROTECTED_NUMBERS
                 PROTECTED_NUMBERS = data.get("protected_numbers", {})
@@ -290,6 +301,7 @@ def reg_user(uid: int, name: str, d: dict) -> bool:
             "manual_added_credits": 0,
             "joined_at": int(time.time()),
             "refer_code": None, "referred_by": None,
+            "referral_count": 0,
             "sms_history": []
         }
         return True
@@ -314,6 +326,24 @@ def is_admin(uid: int, d: dict) -> bool:
 def is_banned(uid: int, d: dict) -> bool:
     return uid in d.get("banned", [])
 
+def referral_gate_enabled(d: dict) -> bool:
+    return bool(d.get("settings", {}).get("referral_gate_enabled", True))
+
+def referral_required(d: dict) -> int:
+    try:
+        return max(0, int(d.get("settings", {}).get("referral_required", 2)))
+    except Exception:
+        return 2
+
+def referral_progress(uid: int, d: dict) -> tuple[int, int]:
+    required = referral_required(d)
+    count = d.get("users", {}).get(str(uid), {}).get("referral_count", 0)
+    try:
+        count = max(0, int(count))
+    except Exception:
+        count = 0
+    return count, required
+
 def can_use(uid: int, d: dict) -> bool:
     if is_banned(uid, d):
         return False
@@ -323,7 +353,11 @@ def can_use(uid: int, d: dict) -> bool:
         return True
     if uid in d.get("approved", []):
         return True
-    return False
+    # Regular users are gated by the admin-configurable referral requirement.
+    if not referral_gate_enabled(d):
+        return True
+    count, required = referral_progress(uid, d)
+    return count >= required
 
 def role_tag(uid: int, d: dict) -> str:
     if is_main_owner(uid): return f"{em(EMOJI_CROWN, '👑')} ᴍᴀɪɴ ᴏᴡɴᴇʀ"
@@ -384,6 +418,9 @@ def process_referral(new_uid: int, code: str, d: dict) -> tuple:
     add_credits(new_uid, ref_credits, d, is_manual=False)
     add_credits(referrer_uid, ref_credits, d, is_manual=False)
     d["users"][str(new_uid)]["referred_by"] = referrer_uid
+    d["users"][str(referrer_uid)]["referral_count"] = (
+        d["users"][str(referrer_uid)].get("referral_count", 0) + 1
+    )
     save(d)
     return True, f"{em(EMOJI_GIFT, '🎉')} ᴡᴇʟᴄᴏᴍE! ᴀᴀᴘᴋᴏ {ref_credits} ᴄʀᴇᴅɪᴛs ᴍɪʟᴇ ʜᴀɪɴ!", referrer_uid
 
@@ -712,6 +749,57 @@ def force_join_kb(missing: list) -> InlineKeyboardMarkup:
     rows.append([btn("ʀᴇғʀᴇsʜ / ᴄʜᴇᴄᴋ", "fj:check", EMOJI_GEAR, "🔄", style="primary")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+def referral_gate_text(uid: int, d: dict, bot_username: str = "") -> str:
+    count, required = referral_progress(uid, d)
+    ref_credits = d.get("settings", {}).get("ref_credits", 3)
+    code = generate_user_refer_code(uid, d)
+    link = f"https://t.me/{bot_username}?start={code}" if bot_username else f"https://t.me/?start={code}"
+    remaining = max(0, required - count)
+
+    if required <= 0 or not referral_gate_enabled(d):
+        return (
+            f"{em(EMOJI_CHECK, '✅')} <b>Referral Access Enabled</b>\n\n"
+            f"Aapke liye referral requirement currently disabled hai.\n"
+            f"<i>Bot ke features normally available hain.</i>"
+        )
+
+    progress = "▰" * min(count, required) + "▱" * max(0, required - min(count, required))
+    return (
+        f"{em(EMOJI_GIFT, '🎁')} <b>Unlock Bot Access</b>\n\n"
+        f"Bot ke main features use karne se pehle <b>{required} successful referrals</b> complete karein.\n\n"
+        f"{em(EMOJI_CHECK, '📊')} <b>Your Progress</b>\n"
+        f"<code>{progress}</code>  <b>{count}/{required}</b>\n"
+        f"{em(EMOJI_STAR, '👥')} Remaining: <b>{remaining}</b> referral(s)\n\n"
+        f"{em(EMOJI_MONEY, '💰')} Har successful referral par <b>+{ref_credits} credits</b> milenge.\n\n"
+        f"{em(EMOJI_GEAR, '🔗')} <b>Your Personal Referral Link</b>\n"
+        f"<code>{link}</code>\n\n"
+        f"<i>Link open/share karein. Jab koi new user is link se bot start karega, referral count automatically update ho jayega.</i>"
+    )
+
+def referral_gate_kb(uid: int, d: dict, bot_username: str = "") -> InlineKeyboardMarkup:
+    code = generate_user_refer_code(uid, d)
+    link = f"https://t.me/{bot_username}?start={code}" if bot_username else f"https://t.me/?start={code}"
+    share_text = "Join this bot using my referral link and help me unlock access!"
+    share_url = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(share_text, safe='')}"
+    rows = [
+        [btn_url("sʜᴀʀᴇ ʀᴇғᴇʀʀᴀʟ ʟɪɴᴋ", share_url, EMOJI_GIFT, "🎁", style="success")],
+        [btn_url("ᴏᴘᴇɴ ʀᴇғᴇʀʀᴀʟ ʟɪɴᴋ", link, EMOJI_STAR, "🔗", style="primary"), btn("ᴄʜᴇᴄᴋ ᴘʀᴏɢʀᴇss", "user:referral_check", EMOJI_GEAR, "🔄", style="primary")],
+        [btn("ʀᴇғᴇʀʀᴀʟ ᴘʀᴏɢʀᴀᴍ", "user:refer", EMOJI_STAR, "👥", style="primary")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def show_referral_gate_message(target, uid: int, d: dict):
+    try:
+        me = await target.bot.get_me()
+        text = referral_gate_text(uid, d, me.username or "")
+        markup = referral_gate_kb(uid, d, me.username or "")
+        await target.edit_text(text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        me = await target.bot.get_me()
+        text = referral_gate_text(uid, d, me.username or "")
+        markup = referral_gate_kb(uid, d, me.username or "")
+        await target.answer(text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+
 def fmt_time(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M")
 
@@ -810,6 +898,7 @@ def admin_panel_text(d: dict) -> str:
         f"{em(EMOJI_LOCK, '🔒')} ᴘʀᴏᴛᴇᴄᴛᴇᴅ     : <b>{protected_count}</b>\n"
         f"{em(EMOJI_PHONE, '📱')} ᴘᴇʀ ғɪʀᴇʙᴀsᴇ  :\n{fb_summary}\n"
         f"{em(EMOJI_GIFT, '🔓')} ᴀᴄᴄᴇss ᴍᴏᴅᴇ   : {mode}\n"
+        f"{em(EMOJI_STAR, '👥')} ʀᴇғᴇʀʀᴀʟ ɢᴀᴛᴇ: <b>{'ON' if d.get('settings', {}).get('referral_gate_enabled', True) else 'OFF'}</b> | <b>{referral_required(d)}</b> ʀᴇǫᴜɪʀᴇᴅ\n"
         f"{em(EMOJI_GEAR, '🔄')} sᴄᴀɴɴᴇʀ       : {scan_info}\n"
         f"━━━━━━━━━━━━━━━━━━"
     )
@@ -824,6 +913,7 @@ def user_home_text(uid: int, d: dict) -> str:
         f"<b>Owner:</b> {SUPER_ADMIN_NAME}\n\n"
         f"{em(EMOJI_STAR, '👤')} ʀᴏʟᴇ    : {role_tag(uid, d)}\n"
         f"{em(EMOJI_MONEY, '💰')} ᴄʀᴇᴅɪᴛs : <b>{credits}</b>\n"
+        f"{em(EMOJI_STAR, '👥')} ʀᴇғᴇʀʀᴀʟs: <b>{udata.get('referral_count', 0)}</b>\n"
         f"{em(EMOJI_STAR, '🔢')} ᴜsᴇs    : <b>{udata.get('uses', 0)}</b>\n"
         f"{em(EMOJI_FIRE, '🔥')} ᴀᴘɪs    : <b>{len(fbs)}</b> ғɪʀᴇʙᴀsᴇ(s)\n"
         f"{em(EMOJI_GEAR, '🔄')} sᴄᴀɴɴᴇʀ : {scan_info}\n\n"
@@ -842,7 +932,8 @@ def owner_kb(d: dict) -> InlineKeyboardMarkup:
         [btn("ʀᴇᴅᴇᴇᴍ ᴄᴏᴅᴇs", "owner:redeem:menu", EMOJI_GIFT, "🎁"), btn("ᴀᴅᴅ ᴄʀᴇᴅɪᴛs", "owner:credits:add", EMOJI_MONEY, "💰")],
         [btn("ᴅᴇᴅᴜᴄᴛ ᴄʀᴇᴅɪᴛs", "owner:credits:deduct", EMOJI_CROSS, "💰"), btn("ᴀᴅᴅ ᴄʀᴇᴅɪᴛs ᴀʟʟ", "owner:add_all_credits", EMOJI_MONEY, "💰")],
         [btn("ᴅᴇᴅᴜᴄᴛ ᴀʟʟ", "owner:deduct_all_credits", EMOJI_CROSS, "💰"), btn("ғᴏʀᴄᴇ ᴊᴏɪɴ", "owner:fj:menu", EMOJI_BELL, "🔗")],
-        [btn("sᴇᴛᴛɪɴɢs", "owner:settings", EMOJI_GEAR, "⚙️"), btn("sᴍs ʜɪsᴛᴏʀʏ", "owner:sms_history", EMOJI_STAR, "📋")],
+        [btn("sᴇᴛᴛɪɴɢs", "owner:settings", EMOJI_GEAR, "⚙️"), btn("ʀᴇғᴇʀʀᴀʟ ɢᴀᴛᴇ", "owner:referral:menu", EMOJI_GIFT, "🎁")],
+        [btn("sᴍs ʜɪsᴛᴏʀʏ", "owner:sms_history", EMOJI_STAR, "📋")],
         [btn("ᴇxᴘᴏʀᴛ sᴄʀɪᴘᴛ", "owner:export_script", EMOJI_GEAR, "📤"), btn("ᴘʀᴏᴛᴇᴄᴛ ɴᴜᴍʙᴇʀ", "owner:protect", EMOJI_LOCK, "🔒")],
         [btn("ᴘʀᴏᴛᴇᴄᴛᴇᴅ ʟɪsᴛ", "owner:protected_list", EMOJI_LOCK, "🔐"), btn("ᴛʀᴀᴄᴋ ɴᴜᴍʙᴇʀ", "owner:track", EMOJI_STAR, "📊")],
         [InlineKeyboardButton(text=mode_btn[0], callback_data=mode_btn[1])],
@@ -855,6 +946,7 @@ def admin_kb(d: dict) -> InlineKeyboardMarkup:
         [btn("ᴠɪᴇᴡ ᴜsᴇʀs", "admin:users:list", EMOJI_STAR, "👥", style="primary"), btn("ᴀᴘɪ sᴛᴀᴛs", "admin:stats", EMOJI_STAR, "📊", style="primary")],
         [btn("ʙᴀɴ ᴜsᴇʀ", "admin:ban", EMOJI_CROSS, "🚫", style="danger"), btn("ᴜɴʙᴀɴ ᴜsᴇʀ", "admin:unban:menu", EMOJI_CHECK, "✅", style="success")],
         [btn("ʙʀᴏᴀᴅᴄᴀsᴛ", "admin:broadcast", EMOJI_BELL, "📢", style="primary")],
+        [btn("ʀᴇғᴇʀʀᴀʟ ɢᴀᴛᴇ", "admin:referral:menu", EMOJI_GIFT, "🎁", style="primary")],
         [btn("ʀᴇғʀᴇsʜ", "admin:refresh", EMOJI_GEAR, "🔄", style="primary")],
     ])
 
@@ -1048,8 +1140,6 @@ async def cmd_start_deep(msg: Message, state: FSMContext):
         await msg.answer(force_join_text(missing), reply_markup=force_join_kb(missing), parse_mode="HTML", disable_web_page_preview=True)
         return
 
-    await send_random_video(msg.bot, msg.chat.id, caption=f"{em(EMOJI_ROCKET, '🚀')} Welcome to SMS Blast Bot!\nOwner: {SUPER_ADMIN_NAME}\nManager: @Titanium_Ansh")
-
     if is_owner(uid, d):
         await msg.answer(owner_panel_text(d), reply_markup=owner_kb(d), parse_mode="HTML")
         return
@@ -1060,9 +1150,10 @@ async def cmd_start_deep(msg: Message, state: FSMContext):
         await msg.answer(f"{em(EMOJI_CROSS, '🚫')} <b>Aapko ban kar diya gaya hai.</b>\nAdmin se contact karein.", parse_mode="HTML")
         return
     if not can_use(uid, d):
-        await msg.answer(f"{em(EMOJI_CROSS, '⛔')} <b>Access nahi hai!</b>\n\nOwner se approval lein. Sahilxalone.t.me ", parse_mode="HTML")
+        await show_referral_gate_message(msg, uid, d)
         return
 
+    await send_random_video(msg.bot, msg.chat.id, caption=f"{em(EMOJI_ROCKET, '🚀')} Welcome to SMS Blast Bot!\nOwner: {SUPER_ADMIN_NAME}")
     await msg.answer(user_home_text(uid, d), reply_markup=user_kb(), parse_mode="HTML")
 
 @R.message(Command("start"))
@@ -1092,8 +1183,6 @@ async def cmd_start(msg: Message, state: FSMContext):
         await msg.answer(force_join_text(missing), reply_markup=force_join_kb(missing), parse_mode="HTML", disable_web_page_preview=True)
         return
 
-    await send_random_video(msg.bot, msg.chat.id, caption=f"{em(EMOJI_ROCKET, '🚀')} Welcome to SMS Blast Bot!\nOwner: {SUPER_ADMIN_NAME}")
-
     if is_owner(uid, d):
         await msg.answer(owner_panel_text(d), reply_markup=owner_kb(d), parse_mode="HTML")
         return
@@ -1104,9 +1193,10 @@ async def cmd_start(msg: Message, state: FSMContext):
         await msg.answer(f"{em(EMOJI_CROSS, '🚫')} <b>Aapko ban kar diya gaya hai.</b>\nAdmin se contact karein.", parse_mode="HTML")
         return
     if not can_use(uid, d):
-        await msg.answer(f"{em(EMOJI_CROSS, '⛔')} <b>Access nahi hai!</b>\n\nOwner se approval lein.", parse_mode="HTML")
+        await show_referral_gate_message(msg, uid, d)
         return
 
+    await send_random_video(msg.bot, msg.chat.id, caption=f"{em(EMOJI_ROCKET, '🚀')} Welcome to SMS Blast Bot!\nOwner: {SUPER_ADMIN_NAME}")
     await msg.answer(user_home_text(uid, d), reply_markup=user_kb(), parse_mode="HTML")
 
 @R.callback_query(F.data == "fj:check")
@@ -1122,6 +1212,11 @@ async def fj_check(cq: CallbackQuery, state: FSMContext):
         return
 
     await cq.answer("✅ Verified!", show_alert=True)
+
+    if not is_owner(uid, d) and not is_admin(uid, d) and not is_banned(uid, d) and not can_use(uid, d):
+        await show_referral_gate_message(cq.message, uid, d)
+        return
+
     await send_random_video(cq.bot, cq.message.chat.id, caption=f"{em(EMOJI_ROCKET, '🚀')} Welcome! Verified Successfully.\nOwner: {SUPER_ADMIN_NAME}")
 
     if is_owner(uid, d):
@@ -1143,7 +1238,8 @@ async def user_send_start(cq: CallbackQuery, state: FSMContext):
         return
 
     if not can_use(uid, d):
-        await cq.answer("🚫 Access denied!", show_alert=True)
+        await cq.answer("🎁 Referral requirement complete karein!", show_alert=True)
+        await show_referral_gate_message(cq.message, uid, d)
         return
     await state.set_state(S.send_number)
     await cq.message.edit_text(
@@ -3472,6 +3568,87 @@ async def owner_credits_deduct_amount(msg: Message, state: FSMContext):
             parse_mode="HTML"
         )
 
+async def _show_referral_settings(cq: CallbackQuery, d: dict, back_callback: str):
+    settings = d.setdefault("settings", {})
+    enabled = bool(settings.get("referral_gate_enabled", True))
+    required = referral_required(d)
+    ref_credits = settings.get("ref_credits", 3)
+    status = f"{em(EMOJI_CHECK, '🟢')} ON" if enabled else f"{em(EMOJI_CROSS, '🔴')} OFF"
+    text = (
+        f"{em(EMOJI_GIFT, '🎁')} <b>Referral Gate Settings</b>\n\n"
+        f"{em(EMOJI_GEAR, '⚙️')} Status: <b>{status}</b>\n"
+        f"{em(EMOJI_STAR, '🔢')} Required Referrals: <b>{required}</b>\n"
+        f"{em(EMOJI_MONEY, '💰')} Referral Reward: <b>{ref_credits} credits</b>\n\n"
+        f"<i>ON: Force Join ke baad regular users ko required referrals complete karne honge.\n"
+        f"OFF: Referral gate bypass ho jayega, existing referral system same rahega.</i>"
+    )
+    toggle_text = "🔴 DISABLE GATE" if enabled else "🟢 ENABLE GATE"
+    rows = [
+        [btn(toggle_text, "owner:referral:toggle", EMOJI_GEAR, "⚙️")],
+        [btn("sᴇᴛ ʀᴇǫᴜɪʀᴇᴅ ʀᴇғᴇʀʀᴀʟs", "owner:referral:set", EMOJI_STAR, "🔢")],
+        [btn("sᴇᴛ ʀᴇᴡᴀʀᴅ ᴄʀᴇᴅɪᴛs", "owner:settings:ref", EMOJI_MONEY, "💰")],
+        [btn("ʙᴀᴄᴋ", back_callback, EMOJI_GEAR, "🔙")]
+    ]
+    await cq.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+@R.callback_query(F.data.in_({"owner:referral:menu", "admin:referral:menu"}))
+async def referral_settings_menu(cq: CallbackQuery, state: FSMContext):
+    d = load()
+    if not is_admin(cq.from_user.id, d):
+        await cq.answer("🚫 Admin Only!", show_alert=True)
+        return
+    await _show_referral_settings(cq, d, "owner:home" if is_owner(cq.from_user.id, d) else "admin:home")
+
+@R.callback_query(F.data == "owner:referral:toggle")
+async def owner_referral_toggle(cq: CallbackQuery, state: FSMContext):
+    d = load()
+    if not is_admin(cq.from_user.id, d):
+        await cq.answer("🚫 Admin Only!", show_alert=True)
+        return
+    settings = d.setdefault("settings", {})
+    settings["referral_gate_enabled"] = not bool(settings.get("referral_gate_enabled", True))
+    save(d)
+    await cq.answer("Referral Gate updated!", show_alert=True)
+    await _show_referral_settings(cq, d, "owner:home" if is_owner(cq.from_user.id, d) else "admin:home")
+
+@R.callback_query(F.data == "owner:referral:set")
+async def owner_referral_set_start(cq: CallbackQuery, state: FSMContext):
+    d = load()
+    if not is_admin(cq.from_user.id, d):
+        await cq.answer("🚫 Admin Only!", show_alert=True)
+        return
+    await state.set_state(S.set_ref_required)
+    await cq.message.edit_text(
+        f"{em(EMOJI_STAR, '🔢')} <b>Set Required Referrals</b>\n\n"
+        f"Users ko access milne se pehle kitne successful referrals chahiye?\n"
+        f"<i>Example: 2</i>\n<i>0 = referral gate effectively disabled</i>",
+        reply_markup=kb([(f"{sc('cancel')}", "owner:referral:menu")]),
+        parse_mode="HTML"
+    )
+
+@R.message(S.set_ref_required)
+async def owner_referral_set_done(msg: Message, state: FSMContext):
+    d = load()
+    if not is_admin(msg.from_user.id, d):
+        await state.clear()
+        return
+    try:
+        required = int(msg.text.strip())
+        if required < 0 or required > 1000:
+            raise ValueError
+    except Exception:
+        await msg.answer(f"{em(EMOJI_CROSS, '❌')} 0 se 1000 ke beech valid number bhejo.", parse_mode="HTML")
+        return
+    d.setdefault("settings", {})["referral_required"] = required
+    save(d)
+    await state.clear()
+    await msg.answer(
+        f"{em(EMOJI_CHECK, '✅')} <b>Referral Requirement Updated</b>\n\n"
+        f"Ab required referrals: <b>{required}</b>",
+        reply_markup=kb([(f"{sc('open referral settings')}", "owner:referral:menu")]),
+        parse_mode="HTML"
+    )
+
 @R.callback_query(F.data == "owner:settings")
 async def owner_settings(cq: CallbackQuery, state: FSMContext):
     d = load()
@@ -3483,6 +3660,7 @@ async def owner_settings(cq: CallbackQuery, state: FSMContext):
     text = (
         f"{em(EMOJI_GEAR, '⚙️')} <b>Bot Settings</b>\n\n"
         f"{em(EMOJI_GIFT, '🎁')} Referral Credits: <b>{settings.get('ref_credits', 3)}</b>\n"
+        f"{em(EMOJI_STAR, '👥')} Referral Gate: <b>{'ON' if settings.get('referral_gate_enabled', True) else 'OFF'}</b> | Required: <b>{referral_required(d)}</b>\n"
         f"{em(EMOJI_CROWN, '👑')} Max Owners: <b>{settings.get('max_owners', 6)}</b>\n\n"
         f"<i>Settings change karne ke liye niche se select karein.</i>"
     )
@@ -3594,7 +3772,7 @@ async def user_home(cq: CallbackQuery, state: FSMContext):
         await cq.message.edit_text(admin_panel_text(d), reply_markup=admin_kb(d), parse_mode="HTML")
         return
     if not can_use(uid, d):
-        await cq.message.edit_text(f"{em(EMOJI_CROSS, '⛔')} Access nahi hai!", parse_mode="HTML")
+        await show_referral_gate_message(cq.message, uid, d)
         return
     await cq.message.edit_text(user_home_text(uid, d), reply_markup=user_kb(), parse_mode="HTML")
 
@@ -3647,6 +3825,31 @@ async def user_redeem_done(msg: Message, state: FSMContext):
         parse_mode="HTML"
     )
 
+@R.callback_query(F.data == "user:referral_check")
+async def user_referral_check(cq: CallbackQuery, state: FSMContext):
+    d = load()
+    uid = cq.from_user.id
+
+    joined, missing = await user_joined_all(cq.bot, uid, d)
+    if not joined:
+        await cq.answer("⛔ Pehle Force Join complete karein!", show_alert=True)
+        await cq.message.edit_text(force_join_text(missing), reply_markup=force_join_kb(missing), parse_mode="HTML", disable_web_page_preview=True)
+        return
+
+    if can_use(uid, d):
+        await cq.answer("✅ Access Unlocked!", show_alert=True)
+        if is_owner(uid, d):
+            await cq.message.edit_text(owner_panel_text(d), reply_markup=owner_kb(d), parse_mode="HTML")
+        elif is_admin(uid, d):
+            await cq.message.edit_text(admin_panel_text(d), reply_markup=admin_kb(d), parse_mode="HTML")
+        else:
+            await cq.message.edit_text(user_home_text(uid, d), reply_markup=user_kb(), parse_mode="HTML")
+        return
+
+    count, required = referral_progress(uid, d)
+    await cq.answer(f"Progress: {count}/{required}", show_alert=True)
+    await show_referral_gate_message(cq.message, uid, d)
+
 @R.callback_query(F.data == "user:refer")
 async def user_refer(cq: CallbackQuery, state: FSMContext):
     d = load()
@@ -3654,16 +3857,27 @@ async def user_refer(cq: CallbackQuery, state: FSMContext):
     code = generate_user_refer_code(uid, d)
     save(d)
     ref_credits = d.get("settings", {}).get("ref_credits", 3)
+    count, required = referral_progress(uid, d)
 
     me = await cq.bot.get_me()
+    link = f"https://t.me/{me.username}?start={code}"
+    share_text = "Join this bot using my referral link and help me unlock access!"
+    share_url = f"https://t.me/share/url?url={quote(link, safe='')}&text={quote(share_text, safe='')}"
+
     await cq.message.edit_text(
-        f"{em(EMOJI_STAR, '👥')} <b>Referral Program</b>\n\n"
-        f"Apna referral code share karein aur har successful referral pe <b>{ref_credits}</b> credits paayein!\n\n"
-        f"{em(EMOJI_GIFT, '🎁')} Your Code: <code>{code}</code>\n\n"
-        f"{em(EMOJI_GEAR, '🔗')} Share Link:\n"
-        f"https://t.me/{me.username}?start={code}",
-        reply_markup=kb([(f"{sc('back')}", "user:home")]),
-        parse_mode="HTML"
+        f"{em(EMOJI_GIFT, '🎁')} <b>Referral Center</b>\n\n"
+        f"{em(EMOJI_STAR, '📊')} <b>Your Progress:</b> <code>{count}/{required}</code>\n"
+        f"{em(EMOJI_MONEY, '💰')} <b>Reward:</b> +{ref_credits} credits / successful referral\n\n"
+        f"{em(EMOJI_GEAR, '🔗')} <b>Your Personal Referral Link</b>\n"
+        f"<code>{link}</code>\n\n"
+        f"<i>Is link ko friends ke saath share karein. New user jab isi link se /start karega, referral automatically count hoga.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [btn_url("sʜᴀʀᴇ ʟɪɴᴋ", share_url, EMOJI_GIFT, "🎁", style="success")],
+            [btn_url("ᴏᴘᴇɴ ʟɪɴᴋ", link, EMOJI_STAR, "🔗", style="primary"), btn("ᴄʜᴇᴄᴋ ᴘʀᴏɢʀᴇss", "user:referral_check", EMOJI_GEAR, "🔄", style="primary")],
+            [btn("ʙᴀᴄᴋ", "user:home", EMOJI_GEAR, "🔙")]
+        ]),
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
 @R.callback_query(F.data == "user:stats")
@@ -3676,6 +3890,7 @@ async def user_stats(cq: CallbackQuery, state: FSMContext):
     await cq.message.edit_text(
         f"{em(EMOJI_STAR, '📊')} <b>Your Stats</b>\n\n"
         f"{em(EMOJI_MONEY, '💰')} Credits: <b>{udata.get('credits', 0)}</b>\n"
+        f"{em(EMOJI_STAR, '👥')} Successful Referrals: <b>{udata.get('referral_count', 0)}</b>\n"
         f"{em(EMOJI_CHECK, '📤')} SMS Sent: <b>{udata.get('uses', 0)}</b>\n"
         f"{em(EMOJI_GEAR, '📅')} Joined: <b>{fmt_time(udata.get('joined_at', 0))}</b>\n\n"
         f"{em(EMOJI_STAR, '📈')} Bot Total Sent: <b>{stats.get('total_sent', 0)}</b>",
