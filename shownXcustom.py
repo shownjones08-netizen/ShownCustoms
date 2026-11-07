@@ -33,9 +33,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("BlastBot")
 
-MAIN_OWNER = 8695946179
-SUPER_ADMIN_NAME = "@sahilxalone"
-SUPER_ADMIN_LINK = "https://t.me/sahilxalone"
+MAIN_OWNER = 8984851474
+SUPER_ADMIN_NAME = "@WhoIsShown"
+SUPER_ADMIN_LINK = "https://t.me/WhoIsShown"
 SUPER_ADMINS = [8695946179]
 
 BOT_TOKEN = ""  # paste token
