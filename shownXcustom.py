@@ -17,10 +17,10 @@ from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKe
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 # ===================== CONFIGURATION =====================
-BOT_TOKEN = "8903431287:AAH2y695cDTNT5GXT97V6BJ3fLxbYAQukb8"
-ADMIN_ID = 6833492658
-ADMIN_USERNAME = "PrimeXB24_bomber_bot"
-OWNER_USERNAME = "PrimeXB24_bomber_bot"
+BOT_TOKEN = ""
+ADMIN_ID = 8811450472
+ADMIN_USERNAME = "aerivue"
+OWNER_USERNAME = "ShownOfficial"
 
 # ===================== PRIVATE LOG CHANNEL =====================
 # Put your private channel/group ID here (must start with -100)
