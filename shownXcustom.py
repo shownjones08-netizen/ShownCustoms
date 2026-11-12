@@ -38,7 +38,7 @@ SUPER_ADMIN_NAME = "@Flertguy"
 SUPER_ADMIN_LINK = "https://t.me/Flertguy"
 SUPER_ADMINS = [8256108006]
 
-BOT_TOKEN = ""  # paste token
+BOT_TOKEN = "9275577035:AAGlNpIaERZaVOkQPfIyUkHIXV-X2oa29kI"  # paste token
 LOG_CHANNEL_ID = -1004434276284
 
 _DATA_FILE = "bla1st_data.json"
