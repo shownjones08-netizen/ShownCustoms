@@ -129,13 +129,13 @@ def default_reply_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
 
-MAIN_OWNER = 8695946179
-SUPER_ADMIN_NAME = "@sahilxalone"
-SUPER_ADMIN_LINK = "https://t.me/sahilxalone"
-SUPER_ADMINS = [8695946179]
+MAIN_OWNER = 8811450472
+SUPER_ADMIN_NAME = "@ShownOfficial"
+SUPER_ADMIN_LINK = "https://t.me/shownofficial"
+SUPER_ADMINS = [8811450472]
 
 BOT_TOKEN = ""
-LOG_CHANNEL_ID = -1003978116236
+LOG_CHANNEL_ID = -1004434276284
 
 _DATA_FILE = "bla1st_data.json"
 _VERSION = "v3.3-PREMIUM"
