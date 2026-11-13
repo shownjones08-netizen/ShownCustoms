@@ -1011,7 +1011,7 @@ def user_home_text(uid: int, d: dict) -> str:
     fbs = d.get("firebases", [])
     credits = udata.get("credits", 0)
     scan_info = get_scan_status()
-    dev_tag = "<a href='https://t.me/flirts_x'>ㅤ⏤͟͟͞͞𝗙ʟɪʀᴛ𝗫ᴏ</a>"
+    dev_tag = "<a href='https://t.me/ShownOfficial'>ㅤ⏤͟͟͞͞Sʜᴏᴡɴ</a>"
     loop_row = em("5465270065102334742", "➿") * 14
     return (
         f"{dev_tag}:\n"
